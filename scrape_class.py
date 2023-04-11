@@ -3,6 +3,8 @@ import zlib
 import json
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
+from selenium.common.exceptions import TimeoutException
+import time
 
 
 class AMS_JOBS:
@@ -32,11 +34,12 @@ class AMS_JOBS:
             f.write("[")
             f.write(",".join(self.data))
             f.write("]")
+            print("PAGE SUCCESSFULLY SCRAPED. DATA CAN BE FOUND IN THE SAME FOLDER.")
             print(f"Data saved in {file_name}...")
 
-    def transform_data_to_json(self):
+    def transform_data_to_json(self, decompressed_data):
         # from b'{...} to {...}
-        data = str(self.decompressed_data, "utf-8")
+        data = str(decompressed_data, "utf-8")
         # makes an [{..}, {...}] ready to be saved as json
         self.data.append(data)
 
@@ -44,20 +47,36 @@ class AMS_JOBS:
         for request in requests:
             # check if this is the right url (api call)
             if "api/search?" in request.url:
-                print("intercepted call")
-                print(request.url)
+
+                #print("intercepted call")
+                #print(request.url)
                 # get the data from the api
                 # b'{...} binary data
-                self.decompressed_data = zlib.decompress(
-                    request.response.body, 16 + zlib.MAX_WBITS
-                )
-                self.transform_data_to_json()
+                #time.sleep(5)
+
+                try: 
+                    decompressed_data = zlib.decompress(
+                        request.response.body, 16 + zlib.MAX_WBITS
+                    )
+                except AttributeError:
+                    #print(request.response.body)
+                    #print("Wait...")
+                    #time.sleep(5)
+                    #decompressed_data = zlib.decompress(
+                    #    request.response.body, 16 + zlib.MAX_WBITS
+                    #)
+                    pass
+
+                self.transform_data_to_json(decompressed_data)
 
     def check_for_api_string(self, driver):
         print("Wait for api to be loaded")
         for request in driver.requests:
             if "api/search?" in request.url:
-                return True
+                print("Request URL")
+                #print(request.url)
+                if not isinstance(request.response, type(None)):
+                    return True
         return False
 
     def create_page_url(self, page_number: int) -> str:
@@ -66,10 +85,18 @@ class AMS_JOBS:
 
     def create_connection_and_wait_for_load(self, page_url):
         self.driver = webdriver.Chrome(options=self.options)
-
+        driver = self.driver
         # call the driver get and wait for the api to be loaded
-        self.driver.get(page_url)
-        WebDriverWait(self.driver, self.timeout).until(self.check_for_api_string)
+        try:
+            self.driver.get(page_url)
+            WebDriverWait(driver, self.timeout).until(self.check_for_api_string)
+            
+        except TimeoutException:
+            print("Timeout: Page is called again...")
+            self.driver.get(page_url)
+            WebDriverWait(driver, self.timeout).until(self.check_for_api_string)
+
+        return self.driver
 
     def get_total_pages(self):
         try:
@@ -98,14 +125,15 @@ class AMS_JOBS:
         print(f"Total Pages: {self.total_pages}")
 
         for page in range(1, self.total_pages + 1):
+            self.page_url = self.create_page_url(page)
             print(f"Scraping page {page}")
 
             # create new connection
-            self.create_connection_and_wait_for_load(self.create_page_url(page))
+            driver = self.create_connection_and_wait_for_load(self.page_url)
 
-            self.intercept_api_call(self.driver.requests)
+            self.intercept_api_call(driver.requests)
 
             # quit after stuff done
-            self.driver.quit()
+            driver.quit()
 
         self.save_data_to_json()
